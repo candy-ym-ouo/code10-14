@@ -18,6 +18,7 @@ import mediaRoutes from "./routes/media.js";
 import annotationRoutes from "./routes/annotations.js";
 import reviewRoutes from "./routes/review.js";
 import goalRoutes from "./routes/goals.js";
+import repertoireRoutes from "./routes/repertoire.js";
 import statisticsRoutes from "./routes/statistics.js";
 import exportRoutes from "./routes/exports.js";
 import healthRoutes from "./routes/health.js";
@@ -95,6 +96,7 @@ export async function buildApp() {
   await app.register(annotationRoutes, { prefix: "/api/v1" });
   await app.register(reviewRoutes, { prefix: "/api/v1" });
   await app.register(goalRoutes, { prefix: "/api/v1/goals" });
+  await app.register(repertoireRoutes, { prefix: "/api/v1" });
   await app.register(statisticsRoutes, { prefix: "/api/v1/statistics" });
   await app.register(exportRoutes, { prefix: "/api/v1/exports" });
 

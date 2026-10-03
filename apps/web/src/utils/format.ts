@@ -66,3 +66,61 @@ export const goalStatusLabels = {
   MISSED: "已逾期",
   CANCELLED: "已取消",
 } as const;
+
+export const pieceStatusLabels = {
+  ACTIVE: "在练",
+  ARCHIVED: "已归档",
+  MERGED: "已合并",
+} as const;
+
+export const keySignatureLabels: Record<string, string> = {
+  C_MAJOR: "C 大调",
+  G_MAJOR: "G 大调",
+  D_MAJOR: "D 大调",
+  A_MAJOR: "A 大调",
+  E_MAJOR: "E 大调",
+  B_MAJOR: "B 大调",
+  F_SHARP_MAJOR: "升 F 大调",
+  C_SHARP_MAJOR: "升 C 大调",
+  F_MAJOR: "F 大调",
+  B_FLAT_MAJOR: "降 B 大调",
+  E_FLAT_MAJOR: "降 E 大调",
+  A_FLAT_MAJOR: "降 A 大调",
+  D_FLAT_MAJOR: "降 D 大调",
+  G_FLAT_MAJOR: "降 G 大调",
+  C_FLAT_MAJOR: "降 C 大调",
+  A_MINOR: "a 小调",
+  E_MINOR: "e 小调",
+  B_MINOR: "b 小调",
+  F_SHARP_MINOR: "升 f 小调",
+  C_SHARP_MINOR: "升 c 小调",
+  G_SHARP_MINOR: "升 g 小调",
+  D_MINOR: "d 小调",
+  G_MINOR: "g 小调",
+  C_MINOR: "c 小调",
+  F_MINOR: "f 小调",
+  B_FLAT_MINOR: "降 b 小调",
+  E_FLAT_MINOR: "降 e 小调",
+  A_FLAT_MINOR: "降 a 小调",
+  UNKNOWN: "未记录",
+};
+
+export const keySignatureOptions = Object.entries(keySignatureLabels).map(([value, label]) => ({ value, label })) as Array<{ value: keyof typeof keySignatureLabels; label: string }>;
+
+export const difficultyLabels: Record<number, string> = {
+  1: "1 · 入门",
+  2: "2 · 初级",
+  3: "3 · 中级",
+  4: "4 · 高级",
+  5: "5 · 挑战",
+};
+
+export function formatKeySignature(value: string | null | undefined): string {
+  if (!value) return keySignatureLabels.UNKNOWN ?? "未记录";
+  return keySignatureLabels[value] ?? value;
+}
+
+export function formatDifficulty(value: number | null | undefined): string {
+  if (value == null) return "未评级";
+  return difficultyLabels[value] ?? String(value);
+}

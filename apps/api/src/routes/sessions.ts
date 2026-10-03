@@ -31,6 +31,15 @@ const sessionRoutes: FastifyPluginAsync = async (app) => {
     if (input.startedAt.getTime() > Date.now() + 5 * 60_000) {
       throw new AppError(400, "VALIDATION_ERROR", "练习开始时间不能晚于当前时间 5 分钟以上");
     }
+    if (input.pieceId) {
+      const piece = await prisma.repertoirePiece.findFirst({
+        where: { id: input.pieceId, userId: request.authUser!.id },
+        select: { id: true, status: true },
+      });
+      if (!piece) throw new AppError(400, "VALIDATION_ERROR", "关联的曲目不存在");
+      if (piece.status === "MERGED") throw new AppError(400, "PIECE_MERGED", "不能为已合并曲目创建练习");
+    }
+    const pieceId = input.pieceId ?? null;
     const created = await prisma.practiceSession.create({
       data: {
         userId: request.authUser!.id,
@@ -41,8 +50,22 @@ const sessionRoutes: FastifyPluginAsync = async (app) => {
         notes: input.notes ?? null,
         startedAt: input.startedAt,
         actualDurationMs: input.actualDurationMs ?? 0,
+        ...(pieceId ? { pieceId } : {}),
       },
     });
+    if (pieceId) {
+      await prisma.$transaction(async (tx) => {
+        const latest = await tx.practiceSession.findFirst({
+          where: { pieceId },
+          orderBy: { startedAt: "desc" },
+          select: { startedAt: true },
+        });
+        await tx.repertoirePiece.update({
+          where: { id: pieceId },
+          data: { lastPracticedAt: latest?.startedAt ?? null, version: { increment: 1 } },
+        });
+      });
+    }
     await audit(request, "SESSION_CREATED", "PRACTICE_SESSION", created.id, "SUCCESS");
     return reply.status(201).send({ session: created });
   });

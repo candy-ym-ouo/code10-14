@@ -38,6 +38,39 @@ export const METRIC_TYPES = [
 ] as const;
 export const EVIDENCE_REQUIREMENTS = ["NONE", "AUDIO", "SELF_REVIEW", "AUDIO_AND_SELF_REVIEW"] as const;
 export const GOAL_STATUSES = ["OPEN", "IN_PROGRESS", "ACHIEVED", "MISSED", "CANCELLED"] as const;
+export const PIECE_STATUSES = ["ACTIVE", "ARCHIVED", "MERGED"] as const;
+export const KEY_SIGNATURES = [
+  "C_MAJOR",
+  "G_MAJOR",
+  "D_MAJOR",
+  "A_MAJOR",
+  "E_MAJOR",
+  "B_MAJOR",
+  "F_SHARP_MAJOR",
+  "C_SHARP_MAJOR",
+  "F_MAJOR",
+  "B_FLAT_MAJOR",
+  "E_FLAT_MAJOR",
+  "A_FLAT_MAJOR",
+  "D_FLAT_MAJOR",
+  "G_FLAT_MAJOR",
+  "C_FLAT_MAJOR",
+  "A_MINOR",
+  "E_MINOR",
+  "B_MINOR",
+  "F_SHARP_MINOR",
+  "C_SHARP_MINOR",
+  "G_SHARP_MINOR",
+  "D_MINOR",
+  "G_MINOR",
+  "C_MINOR",
+  "F_MINOR",
+  "B_FLAT_MINOR",
+  "E_FLAT_MINOR",
+  "A_FLAT_MINOR",
+  "UNKNOWN",
+] as const;
+export const MERGE_CONFLICT_FIELDS = ["composer", "keySignature", "difficulty", "notes"] as const;
 
 const requiredText = (label: string, max: number) =>
   z.string().trim().min(1, `${label}不能为空`).max(max, `${label}不能超过 ${max} 个字符`);
@@ -80,9 +113,11 @@ export const sessionCreateSchema = z.object({
   location: optionalText(120, "练习地点"),
   notes: optionalText(5000, "总体备注"),
   actualDurationMs: z.coerce.number().int().positive().max(86_400_000).optional().nullable(),
+  pieceId: z.string().uuid().optional().nullable(),
 });
 export const sessionUpdateSchema = sessionCreateSchema
   .partial()
+  .omit({ pieceId: true })
   .extend({ version: z.coerce.number().int().nonnegative() });
 export const sessionBatchSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(100),
@@ -93,6 +128,7 @@ export const sessionListQuerySchema = z.object({
   instrument: z.string().trim().max(60).optional(),
   annotationType: z.enum(ANNOTATION_TYPES).optional(),
   goalStatus: z.enum(GOAL_STATUSES).optional(),
+  pieceId: z.string().uuid().optional(),
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
   sortBy: z.enum(["startedAt", "actualDurationMs", "annotationCount", "updatedAt"]).default("startedAt"),
@@ -188,6 +224,55 @@ export const completionSchema = z.object({
   annotationVersion: z.coerce.number().int().nonnegative().optional(),
 });
 
+export const pieceCreateSchema = z.object({
+  title: requiredText("曲目名称", 160),
+  composer: optionalText(160, "作曲家"),
+  movement: optionalText(200, "乐章/片段"),
+  keySignature: z.enum(KEY_SIGNATURES).default("UNKNOWN"),
+  difficulty: z.coerce.number().int().min(1).max(5).optional().nullable(),
+  instrument: optionalText(60, "乐器"),
+  tags: z.array(requiredText("问题标签", 32)).max(20).default([]),
+  notes: optionalText(3000, "曲目备注"),
+});
+export const pieceUpdateSchema = pieceCreateSchema
+  .partial()
+  .extend({ version: z.coerce.number().int().nonnegative() });
+export const pieceTagsSchema = z.object({
+  tags: z.array(requiredText("问题标签", 32)).min(1).max(20),
+});
+export const pieceListQuerySchema = z.object({
+  q: z.string().trim().max(200).optional(),
+  status: z.enum(PIECE_STATUSES).default("ACTIVE"),
+  keySignature: z.enum(KEY_SIGNATURES).optional(),
+  difficulty: z.coerce.number().int().min(1).max(5).optional(),
+  instrument: z.string().trim().max(60).optional(),
+  tag: z.string().trim().max(32).optional(),
+  sortBy: z.enum(["title", "difficulty", "lastPracticedAt", "updatedAt"]).default("updatedAt"),
+  sortOrder: z.enum(["asc", "desc"]).default("desc"),
+  cursor: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+});
+export const pieceMergeSchema = z.object({
+  sourcePieceId: z.string().uuid(),
+});
+export const mergeConflictResolveSchema = z
+  .object({
+    composer: optionalText(160, "作曲家"),
+    keySignature: z.enum(KEY_SIGNATURES).optional(),
+    difficulty: z.coerce.number().int().min(1).max(5).optional(),
+    notes: optionalText(3000, "曲目备注"),
+  })
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "至少解决一个冲突字段",
+  });
+export const pieceSessionLinkSchema = z.object({
+  sessionId: z.string().uuid(),
+});
+export const pieceSessionListQuerySchema = z.object({
+  cursor: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+});
+
 export const statisticsRangeSchema = z.object({
   from: z.coerce.date(),
   to: z.coerce.date(),
@@ -210,6 +295,9 @@ export type GoalCategory = (typeof GOAL_CATEGORIES)[number];
 export type MetricType = (typeof METRIC_TYPES)[number];
 export type GoalStatus = (typeof GOAL_STATUSES)[number];
 export type EvidenceRequirement = (typeof EVIDENCE_REQUIREMENTS)[number];
+export type PieceStatus = (typeof PIECE_STATUSES)[number];
+export type KeySignature = (typeof KEY_SIGNATURES)[number];
+export type MergeConflictField = (typeof MERGE_CONFLICT_FIELDS)[number];
 
 export interface ApiErrorBody {
   error: {
@@ -279,4 +367,72 @@ export function describeMissingReview(input: {
     missing.push("已有未关闭目标时，本次至少记录一次目标进度");
   }
   return missing;
+}
+
+export interface MergeablePieceFields {
+  composer: string | null;
+  keySignature: KeySignature;
+  difficulty: number | null;
+  notes: string | null;
+}
+
+export interface MergeFieldAutoFill {
+  field: MergeConflictField;
+  value: string | number | null;
+}
+
+export interface MergeConflict {
+  field: MergeConflictField;
+  targetValue: string | number | null;
+  sourceValue: string | number | null;
+}
+
+export interface MergePlan {
+  autoFills: MergeFieldAutoFill[];
+  conflicts: MergeConflict[];
+  mergedTags: string[];
+}
+
+function normalizeTag(value: string): string {
+  return value.trim().replaceAll(/\s+/g, " ").toLocaleLowerCase("zh-CN");
+}
+
+/**
+ * 规划两条重复曲目的合并结果（纯函数，不执行迁移）。
+ * - 目标为空、源有值时自动补齐；
+ * - 双方都有值且不同时记录为冲突，保留待处理项；
+ * - 问题标签取并集并按名称去重。
+ * 历史练习记录与外键迁移由服务层在同一数据库事务中按本规划原子执行。
+ */
+export function planPieceMerge(input: {
+  target: MergeablePieceFields;
+  source: MergeablePieceFields;
+  targetTags: string[];
+  sourceTags: string[];
+}): MergePlan {
+  const autoFills: MergeFieldAutoFill[] = [];
+  const conflicts: MergeConflict[] = [];
+
+  for (const field of MERGE_CONFLICT_FIELDS) {
+    const targetValue = input.target[field];
+    const sourceValue = input.source[field];
+    const isEmpty = (value: string | number | null): boolean =>
+      value == null ||
+      (typeof value === "string" && (value.trim() === "" || value === "UNKNOWN"));
+    const targetEmpty = isEmpty(targetValue);
+    const sourceEmpty = isEmpty(sourceValue);
+    if (!targetEmpty && !sourceEmpty && targetValue !== sourceValue) {
+      conflicts.push({ field, targetValue, sourceValue });
+    } else if (targetEmpty && !sourceEmpty) {
+      autoFills.push({ field, value: sourceValue });
+    }
+  }
+
+  const tagMap = new Map<string, string>();
+  for (const tag of [...input.targetTags, ...input.sourceTags]) {
+    const key = normalizeTag(tag);
+    if (key && !tagMap.has(key)) tagMap.set(key, tag.trim());
+  }
+
+  return { autoFills, conflicts, mergedTags: [...tagMap.values()] };
 }

@@ -21,6 +21,7 @@ async function logout(): Promise<void> {
       <nav class="side-nav" aria-label="主导航">
         <RouterLink class="nav-link" to="/">首页概览</RouterLink>
         <RouterLink class="nav-link" to="/sessions">练习历史</RouterLink>
+        <RouterLink class="nav-link" to="/repertoire">曲目资料库</RouterLink>
         <RouterLink class="nav-link" to="/goals">目标中心</RouterLink>
         <RouterLink class="nav-link" to="/statistics">统计</RouterLink>
         <RouterLink class="nav-link" to="/settings">设置</RouterLink>

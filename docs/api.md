@@ -114,6 +114,64 @@ Refresh Cookie 路径为 `/api/v1/auth`，生产环境在 HTTPS 下自动使用 
 
 完成复盘请求会原子写入复盘、目标、进度并更新练习状态。任一步失败时全部回滚，返回 `REVIEW_INCOMPLETE` 且 `details` 为缺失项数组。
 
+## 曲目资料库
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET/POST | `/pieces` | 曲目列表（筛选/搜索/分页）/ 创建 |
+| GET/PATCH | `/pieces/:id` | 曲目详情 / 乐观锁编辑 |
+| PUT | `/pieces/:id/tags` | 全量设置问题标签 |
+| POST | `/pieces/:id/archive` / `/restore` | 归档 / 恢复 |
+| POST | `/pieces/:id/merge` | 合并重复条目（原子迁移引用，冲突保留待处理） |
+| GET | `/pieces/:id/sessions` | 该曲目的历史练习（分页） |
+| POST/DELETE | `/pieces/:id/sessions/:sessionId` | 把练习归入曲目 / 移出 |
+| GET | `/pieces/tags` | 当前用户的问题标签字典 |
+| GET | `/pieces/merges` | 所有仍有待处理冲突的合并 |
+| GET | `/pieces/merges/:mergeId` | 合并详情（含每个字段冲突的双方值） |
+| POST | `/pieces/merges/:mergeId/resolve` | 提交冲突字段的保留值 |
+
+创建曲目：
+
+```json
+{
+  "title": "小提琴协奏曲",
+  "composer": "贝多芬",
+  "movement": "第二乐章 17-24 小节",
+  "keySignature": "D_MAJOR",
+  "difficulty": 4,
+  "instrument": "小提琴",
+  "tags": ["换把", "节奏"],
+  "notes": "注意弱起小节的呼吸"
+}
+```
+
+`keySignature` 使用 24 个大小调枚举或 `UNKNOWN`；`difficulty` 为 1–5 整数，允许为空表示未评级。曲目详情额外返回 `issueCounts`（从关联练习的问题标记聚合）、`hotspots`（严重度 ≥ 4 的困难片段）和 `totalPracticeMs`。
+
+### 合并重复条目
+
+`POST /pieces/:id/merge` 请求体为 `{ "sourcePieceId": "..." }`，服务端在单个数据库事务内：
+
+1. 自动补齐保留曲目为空而来源有值的字段（作曲家、调性、难度、备注）；
+2. 取双方问题标签并集（大小写/空白不敏感去重）；
+3. 将来源条目的**全部历史练习**外键原子迁移到保留曲目；
+4. 来源条目标记为 `MERGED`（不删除，保留审计链路）。
+
+双方都有值且不一致的字段不会被静默选择，而是写入 `piece_merge_conflicts` 作为待处理项，响应示例：
+
+```json
+{
+  "merge": {
+    "id": "…",
+    "status": "PENDING",
+    "conflicts": [
+      { "field": "difficulty", "targetValue": "3", "sourceValue": "4", "status": "PENDING" }
+    ]
+  }
+}
+```
+
+通过 `POST /pieces/merges/:mergeId/resolve` 逐项提交保留值（可取目标值、来源值或自定义值）；最后一个冲突解决后合并状态变为 `RESOLVED`。
+
 ## 统计与导出
 
 | 方法 | 路径 | 说明 |

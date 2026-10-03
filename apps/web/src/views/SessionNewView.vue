@@ -5,6 +5,8 @@ import { apiFetch, ApiError } from "../api/client.js";
 import { useAuthStore } from "../stores/auth.js";
 import { toDateTimeLocal } from "../utils/format.js";
 
+interface PieceOption { id: string; title: string; composer: string | null }
+
 const router = useRouter();
 const auth = useAuthStore();
 const title = ref("");
@@ -14,10 +16,20 @@ const focus = ref("");
 const location = ref("");
 const notes = ref("");
 const durationMinutes = ref<number | null>(null);
+const pieceId = ref("");
+const pieces = ref<PieceOption[]>([]);
 const error = ref("");
 const submitting = ref(false);
 
-onMounted(() => { instrument.value = auth.user?.defaultInstrument ?? ""; });
+onMounted(async () => {
+  instrument.value = auth.user?.defaultInstrument ?? "";
+  try {
+    const result = await apiFetch<{ data: PieceOption[] }>("/api/v1/pieces?status=ACTIVE&limit=100");
+    pieces.value = result.data;
+  } catch {
+    // 曲目资料是可选项，加载失败不阻塞创建练习
+  }
+});
 
 async function submit(): Promise<void> {
   error.value = "";
@@ -33,6 +45,7 @@ async function submit(): Promise<void> {
         location: location.value || null,
         notes: notes.value || null,
         ...(durationMinutes.value == null ? {} : { actualDurationMs: durationMinutes.value * 60_000 }),
+        pieceId: pieceId.value || null,
       }),
     });
     await router.push(`/sessions/${result.session.id}/review`);
@@ -54,6 +67,13 @@ async function submit(): Promise<void> {
       <div class="form-grid">
         <label class="field full"><span>练习标题 / 曲目片段</span><input v-model="title" required maxlength="120" placeholder="例如：协奏曲第二乐章 17-24 小节" /></label>
         <label class="field"><span>乐器</span><input v-model="instrument" required maxlength="60" list="instruments" placeholder="例如：小提琴" /></label>
+        <label class="field">
+          <span>关联曲目（可选）</span>
+          <select v-model="pieceId">
+            <option value="">不关联曲目</option>
+            <option v-for="piece in pieces" :key="piece.id" :value="piece.id">{{ piece.title }}{{ piece.composer ? ` · ${piece.composer}` : "" }}</option>
+          </select>
+        </label>
         <label class="field"><span>开始时间</span><input v-model="startedAt" required type="datetime-local" /></label>
         <label class="field full"><span>本次重点</span><input v-model="focus" maxlength="500" placeholder="例如：保持换把后的音准与连贯性" /></label>
         <label class="field"><span>练习地点</span><input v-model="location" maxlength="120" /></label>

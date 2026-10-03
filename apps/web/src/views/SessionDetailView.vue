@@ -17,6 +17,7 @@ interface Session {
   id: string; title: string; instrument: string; focus: string | null; location: string | null; notes: string | null; status: string; startedAt: string;
   completedAt: string | null; actualDurationMs: number; mediaAssets: Media[]; annotations: Annotation[]; goals: Goal[];
   review: { goodPoints: string | null; mainIssues: string | null; nextFocus: string | null; noIssues: boolean } | null;
+  piece: { id: string; title: string; composer: string | null; keySignature: string; difficulty: number | null } | null;
 }
 
 const route = useRoute();
@@ -99,6 +100,9 @@ onMounted(load);
         <div>
           <div class="row"><h1>{{ session.title }}</h1><StatusBadge :value="session.status" /></div>
           <p>{{ session.instrument }} · {{ formatDateTime(session.startedAt) }} · {{ formatDuration(session.actualDurationMs) }}</p>
+          <p v-if="session.piece" class="muted">
+            曲目：<RouterLink :to="`/repertoire/${session.piece.id}`">{{ session.piece.title }}</RouterLink>
+          </p>
         </div>
         <div class="row wrap">
           <RouterLink v-if="['DRAFT', 'IN_REVIEW'].includes(session.status)" class="button" :to="`/sessions/${session.id}/review`">继续复盘</RouterLink>

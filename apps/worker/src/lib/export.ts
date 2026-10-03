@@ -24,6 +24,13 @@ export async function buildUserExport(userId: string, format: string): Promise<{
           review: true,
         },
       },
+      repertoirePieces: {
+        include: {
+          tags: true,
+          practiceSessions: { select: { id: true, title: true, startedAt: true } },
+          mergeRecordsAsSource: { select: { id: true, targetPieceId: true, status: true } },
+        },
+      },
     },
   });
 
@@ -35,6 +42,7 @@ export async function buildUserExport(userId: string, format: string): Promise<{
       for (const annotation of session.annotations) rows.push(["annotation", annotation.id, session.id, JSON.stringify(annotation)]);
       for (const goal of session.goals) rows.push(["goal", goal.id, session.id, JSON.stringify(goal)]);
     }
+    for (const piece of user.repertoirePieces) rows.push(["piece", piece.id, "", JSON.stringify(piece)]);
     return { body: rows.map((row) => row.map(csvEscape).join(",")).join("\n"), contentType: "text/csv; charset=utf-8" };
   }
   return { body: JSON.stringify({ exportedAt: new Date().toISOString(), user }, null, 2), contentType: "application/json; charset=utf-8" };

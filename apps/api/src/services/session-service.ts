@@ -42,6 +42,7 @@ export const sessionInclude = {
     },
   },
   review: true,
+  piece: { select: { id: true, title: true, composer: true, keySignature: true, difficulty: true } },
 } satisfies Prisma.PracticeSessionInclude;
 
 export async function getSessionForUser(userId: string, sessionId: string) {
@@ -78,6 +79,7 @@ export async function listSessions(userId: string, query: z.infer<typeof session
       : {}),
     ...(query.annotationType ? { annotations: { some: { type: query.annotationType } } } : {}),
     ...(query.goalStatus ? { goals: { some: { status: query.goalStatus } } } : {}),
+    ...(query.pieceId ? { pieceId: query.pieceId } : {}),
   };
 
   const orderBy: Prisma.PracticeSessionOrderByWithRelationInput =
@@ -94,6 +96,7 @@ export async function listSessions(userId: string, query: z.infer<typeof session
       _count: { select: { mediaAssets: true, annotations: true, goals: true } },
       goals: { select: { id: true, title: true, status: true, dueDate: true } },
       annotations: { select: { type: true, severity: true } },
+      piece: { select: { id: true, title: true } },
     },
   });
 
