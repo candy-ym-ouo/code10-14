@@ -9,8 +9,10 @@ import type { completionSchema, sessionListQuerySchema } from "@practice/contrac
 import { AppError, notFound } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
 import { enqueueCleanup } from "../lib/queue.js";
+import { recomputePieceStats } from "./piece-service.js";
 
 export const sessionInclude = {
+  piece: { select: { id: true, title: true, composer: true, key: true, difficulty: true, tags: true, status: true } },
   mediaAssets: {
     orderBy: { createdAt: "asc" },
     select: {
@@ -58,6 +60,8 @@ export async function listSessions(userId: string, query: z.infer<typeof session
     userId,
     ...(query.status !== "ALL" ? { status: query.status as SessionStatus } : {}),
     ...(query.instrument ? { instrument: { equals: query.instrument, mode: "insensitive" } } : {}),
+    ...(query.pieceId ? { pieceId: query.pieceId } : {}),
+    ...(query.tag ? { piece: { tags: { has: query.tag } } } : {}),
     ...(query.from || query.to
       ? {
           startedAt: {
@@ -130,6 +134,7 @@ export async function updateSession(
     version: number;
     title?: string;
     instrument?: string;
+    pieceId?: string | null;
     startedAt?: Date;
     focus?: string | null;
     location?: string | null;
@@ -142,6 +147,13 @@ export async function updateSession(
   if (input.startedAt && input.startedAt.getTime() > Date.now() + 5 * 60_000) {
     throw new AppError(400, "VALIDATION_ERROR", "练习开始时间不能晚于当前时间 5 分钟以上");
   }
+  if (input.pieceId !== undefined && input.pieceId !== existing.pieceId && input.pieceId) {
+    const piece = await prisma.repertoirePiece.findFirst({
+      where: { id: input.pieceId, userId, status: "ACTIVE" },
+      select: { id: true },
+    });
+    if (!piece) throw new AppError(400, "VALIDATION_ERROR", "关联曲目不存在或已合并/归档");
+  }
   if (["DELETING", "DELETE_FAILED"].includes(existing.status)) {
     throw new AppError(409, "INVALID_SESSION_STATE", "正在删除的练习不能编辑");
   }
@@ -150,6 +162,7 @@ export async function updateSession(
     data: {
       ...(input.title === undefined ? {} : { title: input.title }),
       ...(input.instrument === undefined ? {} : { instrument: input.instrument }),
+      ...(input.pieceId === undefined ? {} : { pieceId: input.pieceId }),
       ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }),
       ...(input.focus === undefined ? {} : { focus: input.focus }),
       ...(input.location === undefined ? {} : { location: input.location }),
@@ -159,6 +172,12 @@ export async function updateSession(
     },
   });
   if (result.count !== 1) throw new AppError(409, "VERSION_CONFLICT", "练习已在其他窗口被修改，请刷新后合并");
+  if (input.pieceId !== undefined && input.pieceId !== existing.pieceId) {
+    await prisma.$transaction(async (tx) => {
+      if (existing.pieceId) await recomputePieceStats(tx, existing.pieceId);
+      if (input.pieceId) await recomputePieceStats(tx, input.pieceId);
+    });
+  }
   return getSessionForUser(userId, sessionId);
 }
 
@@ -347,10 +366,14 @@ export async function completeSession(
         data: { status: "IN_PROGRESS", version: { increment: 1 } },
       });
     }
+
+    if (session.pieceId) await recomputePieceStats(tx, session.pieceId);
   });
 
   return getSessionForUser(userId, sessionId);
 }
+
+export { linkSessionToPiece } from "./piece-service.js";
 
 export function allowedSessionTransition(from: ContractSessionStatus, to: ContractSessionStatus): boolean {
   return from === to || (from === "DRAFT" && to === "IN_REVIEW") || (from === "IN_REVIEW" && to === "COMPLETED");

@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { completionSchema, sessionBatchSchema, sessionCreateSchema, sessionListQuerySchema, sessionUpdateSchema } from "@practice/contracts";
+import { completionSchema, sessionBatchSchema, sessionCreateSchema, sessionLinkPieceSchema, sessionListQuerySchema, sessionUpdateSchema } from "@practice/contracts";
 import { z } from "zod";
 import { parseOrThrow } from "../lib/validation.js";
 import { AppError } from "../lib/errors.js";
@@ -11,6 +11,7 @@ import {
   getCompletionMissing,
   getSessionForUser,
   listSessions,
+  linkSessionToPiece,
   requestSessionDeletion,
   startReview,
   updateSession,
@@ -31,11 +32,19 @@ const sessionRoutes: FastifyPluginAsync = async (app) => {
     if (input.startedAt.getTime() > Date.now() + 5 * 60_000) {
       throw new AppError(400, "VALIDATION_ERROR", "练习开始时间不能晚于当前时间 5 分钟以上");
     }
+    if (input.pieceId) {
+      const piece = await prisma.repertoirePiece.findFirst({
+        where: { id: input.pieceId, userId: request.authUser!.id, status: "ACTIVE" },
+        select: { id: true },
+      });
+      if (!piece) throw new AppError(400, "VALIDATION_ERROR", "关联曲目不存在或已合并/归档");
+    }
     const created = await prisma.practiceSession.create({
       data: {
         userId: request.authUser!.id,
         title: input.title,
         instrument: input.instrument,
+        pieceId: input.pieceId ?? null,
         focus: input.focus ?? null,
         location: input.location ?? null,
         notes: input.notes ?? null,
@@ -100,6 +109,14 @@ const sessionRoutes: FastifyPluginAsync = async (app) => {
   app.post("/:id/restore", async (request) => {
     const { id } = request.params as { id: string };
     const session = await archiveSession(request.authUser!.id, id, true);
+    return { session };
+  });
+
+  app.put("/:id/piece", async (request) => {
+    const { id } = request.params as { id: string };
+    const input = parseOrThrow(sessionLinkPieceSchema, request.body);
+    const session = await linkSessionToPiece(request.authUser!.id, id, input.pieceId, input.version);
+    await audit(request, "SESSION_PIECE_LINKED", "PRACTICE_SESSION", id, "SUCCESS", { pieceId: input.pieceId });
     return { session };
   });
 

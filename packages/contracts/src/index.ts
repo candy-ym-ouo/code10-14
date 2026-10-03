@@ -38,6 +38,14 @@ export const METRIC_TYPES = [
 ] as const;
 export const EVIDENCE_REQUIREMENTS = ["NONE", "AUDIO", "SELF_REVIEW", "AUDIO_AND_SELF_REVIEW"] as const;
 export const GOAL_STATUSES = ["OPEN", "IN_PROGRESS", "ACHIEVED", "MISSED", "CANCELLED"] as const;
+export const PIECE_STATUSES = ["ACTIVE", "MERGED", "ARCHIVED"] as const;
+export const MERGE_CONFLICT_FIELDS = ["KEY", "DIFFICULTY", "COMPOSER"] as const;
+export const MERGE_CONFLICT_RESOLUTIONS = [
+  "KEEP_TARGET",
+  "USE_SOURCE",
+  "USE_CUSTOM",
+  "DISMISSED",
+] as const;
 
 const requiredText = (label: string, max: number) =>
   z.string().trim().min(1, `${label}不能为空`).max(max, `${label}不能超过 ${max} 个字符`);
@@ -75,6 +83,7 @@ export const changePasswordSchema = z.object({
 export const sessionCreateSchema = z.object({
   title: requiredText("练习标题", 120),
   instrument: requiredText("乐器", 60),
+  pieceId: z.string().uuid().optional().nullable(),
   startedAt: z.coerce.date(),
   focus: optionalText(500, "本次重点"),
   location: optionalText(120, "练习地点"),
@@ -91,6 +100,8 @@ export const sessionListQuerySchema = z.object({
   q: z.string().trim().max(200).optional(),
   status: z.enum([...SESSION_STATUSES, "ALL"]).default("COMPLETED"),
   instrument: z.string().trim().max(60).optional(),
+  pieceId: z.string().uuid().optional(),
+  tag: z.string().trim().max(40).optional(),
   annotationType: z.enum(ANNOTATION_TYPES).optional(),
   goalStatus: z.enum(GOAL_STATUSES).optional(),
   from: z.coerce.date().optional(),
@@ -180,6 +191,56 @@ export const completionGoalProgressSchema = goalProgressCreateSchema.omit({ sess
   goalId: z.string().uuid(),
 });
 
+const pieceTagSchema = z.string().trim().min(1, "标签不能为空").max(40, "标签不能超过 40 个字符");
+const pieceKeySchema = z
+  .string()
+  .trim()
+  .min(1, "调性不能为空")
+  .max(40, "调性不能超过 40 个字符")
+  .regex(/^[A-G](?:#|b)?(?:\s?(?:maj|min|m|major|minor|dorian|mixolydian))?$/i, "调性格式不正确，例如 C、Am、Bb major、G#min");
+const pieceDifficultySchema = z.coerce.number().int().min(1, "难度最低为 1").max(5, "难度最高为 5");
+
+export const pieceCreateSchema = z.object({
+  title: requiredText("曲目名称", 160),
+  composer: optionalText(160, "作曲家"),
+  key: pieceKeySchema.optional().nullable(),
+  difficulty: pieceDifficultySchema.optional().nullable(),
+  tags: z.array(pieceTagSchema).max(30).default([]),
+  aliases: z.array(requiredText("别名", 160)).max(20).default([]),
+  notes: optionalText(3000, "曲目备注"),
+  allowDuplicate: z.coerce.boolean().default(false),
+});
+export const pieceUpdateSchema = pieceCreateSchema
+  .omit({ allowDuplicate: true })
+  .partial()
+  .extend({ version: z.coerce.number().int().nonnegative(), allowDuplicate: z.coerce.boolean().optional() });
+export const pieceListQuerySchema = z.object({
+  q: z.string().trim().max(200).optional(),
+  composer: z.string().trim().max(160).optional(),
+  key: z.string().trim().max(40).optional(),
+  difficulty: z.coerce.number().int().min(1).max(5).optional(),
+  tag: pieceTagSchema.optional(),
+  status: z.enum(PIECE_STATUSES).default("ACTIVE"),
+  sortBy: z.enum(["updatedAt", "lastPracticedAt", "practiceCount", "difficulty", "title"]).default("updatedAt"),
+  sortOrder: z.enum(["asc", "desc"]).default("desc"),
+  cursor: z.string().uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+});
+export const pieceMergeSchema = z.object({
+  sourcePieceId: z.string().uuid(),
+});
+export const pieceMergeListQuerySchema = z.object({
+  status: z.enum(["CONFLICTS_PENDING", "RESOLVED", "ALL"]).default("CONFLICTS_PENDING"),
+});
+export const mergeConflictResolveSchema = z.object({
+  resolution: z.enum(MERGE_CONFLICT_RESOLUTIONS),
+  customValue: z.string().trim().max(160).optional(),
+});
+export const sessionLinkPieceSchema = z.object({
+  pieceId: z.string().uuid().nullable(),
+  version: z.coerce.number().int().nonnegative().optional(),
+});
+
 export const completionSchema = z.object({
   version: z.coerce.number().int().nonnegative(),
   review: reviewDraftSchema.extend({ nextFocus: requiredText("下次练习重点", 500) }),
@@ -210,6 +271,9 @@ export type GoalCategory = (typeof GOAL_CATEGORIES)[number];
 export type MetricType = (typeof METRIC_TYPES)[number];
 export type GoalStatus = (typeof GOAL_STATUSES)[number];
 export type EvidenceRequirement = (typeof EVIDENCE_REQUIREMENTS)[number];
+export type PieceStatus = (typeof PIECE_STATUSES)[number];
+export type MergeConflictField = (typeof MERGE_CONFLICT_FIELDS)[number];
+export type MergeConflictResolution = (typeof MERGE_CONFLICT_RESOLUTIONS)[number];
 
 export interface ApiErrorBody {
   error: {
@@ -279,4 +343,195 @@ export function describeMissingReview(input: {
     missing.push("已有未关闭目标时，本次至少记录一次目标进度");
   }
   return missing;
+}
+
+const KEY_ALIASES: Record<string, string> = {
+  maj: "maj",
+  min: "min",
+  major: "maj",
+  minor: "min",
+  m: "min",
+  dorian: "dorian",
+  mixolydian: "mixolydian",
+};
+
+/** 规范化调性写法，用于比较与存储，例如 "bb min" -> "Bbmin"。 */
+export function normalizeKeySignature(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  const match = /^([a-g])(#|b)?(?:\s*(maj|min|m|major|minor|dorian|mixolydian))?$/i.exec(trimmed);
+  if (!match) {
+    // 无法解析的写法原样保留并压缩空白，避免误判用户自定义调式。
+    return trimmed.replace(/\s+/g, " ");
+  }
+  const letter = match[1]!.toUpperCase();
+  const accidental = match[2] ?? "";
+  const modeRaw = match[3]?.toLowerCase();
+  const mode = modeRaw ? (KEY_ALIASES[modeRaw] ?? "") : "";
+  return `${letter}${accidental}${mode}`;
+}
+
+/** 去除首尾空白、连续空白、大小写与常见标点差异，作为重复曲目的归一比较键。 */
+export function normalizePieceText(value: string | null | undefined): string {
+  return (value ?? "")
+    .normalize("NFKD")
+    .replace(/[​‌‍﻿]/g, "")
+    .replace(/[【】《》「」『』]/g, "")
+    .replace(/[[\]()（）"'`.,，。;:：;!！?？]/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/(?<=[一-鿿])\s+(?=[一-鿿])/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function uniqueMerge(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const cleaned = value?.trim();
+    if (!cleaned || seen.has(cleaned)) continue;
+    seen.add(cleaned);
+    result.push(cleaned);
+  }
+  return result;
+}
+
+export interface MergeCandidateSummary {
+  title: string;
+  composer?: string | null;
+  aliases?: string[];
+}
+
+/** 判断新曲目是否与已有条目疑似重复：标题/别名相等且作曲家未冲突。 */
+export function isDuplicatePiece(candidate: MergeCandidateSummary, existing: MergeCandidateSummary): boolean {
+  const candidateTitles = uniqueMerge([candidate.title, ...(candidate.aliases ?? [])]).map((item) =>
+    normalizePieceText(item),
+  );
+  const existingTitles = uniqueMerge([existing.title, ...(existing.aliases ?? [])]).map((item) =>
+    normalizePieceText(item),
+  );
+  if (!candidateTitles.some((item) => existingTitles.includes(item))) return false;
+  const candidateComposer = normalizePieceText(candidate.composer ?? null);
+  const existingComposer = normalizePieceText(existing.composer ?? null);
+  return candidateComposer === "" || existingComposer === "" || candidateComposer === existingComposer;
+}
+
+export interface PieceMergeInput {
+  title: string | null;
+  composer: string | null;
+  key: string | null;
+  difficulty: number | null;
+  aliases: string[];
+  tags: string[];
+  notes: string | null;
+}
+
+export interface PlannedMergeConflict {
+  field: MergeConflictField;
+  sourceValue: string | null;
+  targetValue: string | null;
+}
+
+export interface PieceMergePlan {
+  title: string | null;
+  composer: string | null;
+  key: string | null;
+  difficulty: number | null;
+  aliases: string[];
+  tags: string[];
+  notes: string | null;
+  conflicts: PlannedMergeConflict[];
+}
+
+/**
+ * 规划原子迁移：练习、别名、标签和备注可无冲突合并；
+ * 调性、难度、作曲家在两侧均有值且不一致时保留为待处理冲突，不自动覆盖。
+ */
+export function planPieceMerge(source: PieceMergeInput, target: PieceMergeInput): PieceMergePlan {
+  const conflicts: PlannedMergeConflict[] = [];
+  const addConflict = (
+    field: MergeConflictField,
+    sourceValue: string | number | null,
+    targetValue: string | number | null,
+  ): void => {
+    conflicts.push({
+      field,
+      sourceValue: sourceValue == null ? null : String(sourceValue),
+      targetValue: targetValue == null ? null : String(targetValue),
+    });
+  };
+
+  const sourceKey = normalizeKeySignature(source.key);
+  const targetKey = normalizeKeySignature(target.key);
+  if (sourceKey && targetKey && sourceKey !== targetKey) addConflict("KEY", sourceKey, targetKey);
+
+  if (source.difficulty != null && target.difficulty != null && source.difficulty !== target.difficulty) {
+    addConflict("DIFFICULTY", source.difficulty, target.difficulty);
+  }
+
+  const sourceComposer = source.composer?.trim() || null;
+  const targetComposer = target.composer?.trim() || null;
+  if (sourceComposer && targetComposer && normalizePieceText(sourceComposer) !== normalizePieceText(targetComposer)) {
+    addConflict("COMPOSER", sourceComposer, targetComposer);
+  }
+
+  const title = target.title?.trim() || source.title;
+  const resolvedKey = targetKey ?? sourceKey;
+  const resolvedDifficulty = target.difficulty ?? source.difficulty;
+  const resolvedComposer = targetComposer ?? sourceComposer;
+  const aliases = uniqueMerge([
+    ...target.aliases,
+    ...source.aliases,
+    source.title,
+    sourceComposer !== resolvedComposer ? sourceComposer : null,
+  ]).filter((alias) => normalizePieceText(alias) !== normalizePieceText(title));
+  const tags = uniqueMerge([...target.tags, ...source.tags]);
+  const notes = uniqueMerge([target.notes, source.notes]).join("\n\n---\n\n") || null;
+
+  return {
+    title,
+    composer: resolvedComposer,
+    key: resolvedKey,
+    difficulty: resolvedDifficulty,
+    aliases,
+    tags,
+    notes,
+    conflicts,
+  };
+}
+
+/** 应用某条冲突的处理决定，返回新的目标字段值；未涉及字段保持原值。 */
+export function resolveMergeConflict(
+  current: Pick<PieceMergePlan, "composer" | "key" | "difficulty">,
+  conflict: PlannedMergeConflict,
+  resolution: MergeConflictResolution,
+  customValue?: string | null,
+): { composer: string | null; key: string | null; difficulty: number | null } {
+  const next = { composer: current.composer, key: current.key, difficulty: current.difficulty };
+  const applyValue = (value: string | null): void => {
+    if (conflict.field === "KEY") next.key = value ? normalizeKeySignature(value) : null;
+    if (conflict.field === "COMPOSER") next.composer = value;
+    if (conflict.field === "DIFFICULTY") {
+      next.difficulty = value == null ? null : Number(value);
+    }
+  };
+  if (resolution === "DISMISSED" || resolution === "KEEP_TARGET") {
+    if (resolution === "KEEP_TARGET") applyValue(conflict.targetValue);
+    return next;
+  }
+  if (resolution === "USE_SOURCE") {
+    applyValue(conflict.sourceValue);
+    return next;
+  }
+  const custom = customValue?.trim() || null;
+  if (conflict.field === "KEY") next.key = custom ? normalizeKeySignature(custom) : null;
+  if (conflict.field === "COMPOSER") next.composer = custom;
+  if (conflict.field === "DIFFICULTY") {
+    const parsed = custom == null ? NaN : Number(custom);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 5) {
+      throw new Error("自定义难度必须是 1 到 5 的整数");
+    }
+    next.difficulty = parsed;
+  }
+  return next;
 }

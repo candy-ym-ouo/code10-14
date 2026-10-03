@@ -13,9 +13,11 @@ interface Media {
 }
 interface Annotation { id: string; mediaId: string; type: "RHYTHM" | "FINGERING" | "EMOTION"; title: string; severity: number; startMs: number; endMs: number; description: string | null; nextAction: string | null }
 interface Goal { id: string; title: string; category: string; targetValue: number; baselineValue: number | null; unit: string; dueDate: string; status: string; progresses: Array<{ id: string; actualValue: number; note: string | null; recordedAt: string }> }
+interface PieceSummary { id: string; title: string; composer: string | null; key: string | null; difficulty: number | null; tags: string[]; status: string }
 interface Session {
   id: string; title: string; instrument: string; focus: string | null; location: string | null; notes: string | null; status: string; startedAt: string;
-  completedAt: string | null; actualDurationMs: number; mediaAssets: Media[]; annotations: Annotation[]; goals: Goal[];
+  completedAt: string | null; actualDurationMs: number; version: number; mediaAssets: Media[]; annotations: Annotation[]; goals: Goal[];
+  piece: PieceSummary | null; pieceId: string | null;
   review: { goodPoints: string | null; mainIssues: string | null; nextFocus: string | null; noIssues: boolean } | null;
 }
 
@@ -42,6 +44,35 @@ const waveAnnotations = computed<WaveAnnotation[]>(() =>
     })),
 );
 const readyMedia = computed(() => session.value?.mediaAssets.filter((media) => media.status === "READY") ?? []);
+
+const pieceOptions = ref<PieceSummary[]>([]);
+const linkingPiece = ref(false);
+const selectedPieceId = ref("");
+async function loadPieceOptions(): Promise<void> {
+  try {
+    const result = await apiFetch<{ data: PieceSummary[] }>("/api/v1/repertoire/pieces?status=ACTIVE&limit=100&sortBy=updatedAt");
+    pieceOptions.value = result.data;
+  } catch {
+    pieceOptions.value = [];
+  }
+}
+function startLinkPiece(): void {
+  selectedPieceId.value = session.value?.pieceId ?? "";
+  linkingPiece.value = true;
+}
+async function savePieceLink(pieceId: string | null): Promise<void> {
+  if (!session.value) return;
+  await apiFetch(`/api/v1/sessions/${session.value.id}/piece`, {
+    method: "PUT",
+    body: JSON.stringify({ pieceId }),
+  });
+  linkingPiece.value = false;
+  await load();
+}
+async function unlinkPiece(): Promise<void> {
+  if (!window.confirm("解除与该曲目的关联？历史统计会相应更新。")) return;
+  await savePieceLink(null);
+}
 
 async function load(): Promise<void> {
   loading.value = true;
@@ -87,7 +118,10 @@ async function removeSession(): Promise<void> {
   await apiFetch(`/api/v1/sessions/${session.value.id}`, { method: "DELETE", body: JSON.stringify({ confirmationTitle: title }) });
   await router.push("/sessions");
 }
-onMounted(load);
+onMounted(() => {
+  void loadPieceOptions();
+  void load();
+});
 </script>
 
 <template>
@@ -155,6 +189,35 @@ onMounted(load);
         </main>
 
         <aside class="stack">
+          <article class="card stack">
+            <h2>关联曲目</h2>
+            <template v-if="session.piece">
+              <RouterLink class="piece-link" to="/repertoire">
+                <strong>{{ session.piece.title }}</strong>
+                <small class="muted">{{ session.piece.composer || "作曲家未填写" }} · 调性 {{ session.piece.key || "—" }} · 难度 {{ session.piece.difficulty ?? "未评估" }}</small>
+              </RouterLink>
+              <div v-if="session.piece.tags.length" class="piece-tags">
+                <span v-for="tag in session.piece.tags" :key="tag" class="piece-tag">{{ tag }}</span>
+              </div>
+            </template>
+            <p v-else class="muted" style="margin: 0">尚未关联曲目，无法计入曲目历史。</p>
+            <template v-if="linkingPiece">
+              <select v-model="selectedPieceId">
+                <option value="">不关联曲目</option>
+                <option v-for="piece in pieceOptions" :key="piece.id" :value="piece.id">
+                  {{ piece.title }}{{ piece.composer ? ` · ${piece.composer}` : "" }}
+                </option>
+              </select>
+              <div class="row">
+                <button class="button small" @click="savePieceLink(selectedPieceId || null)">保存</button>
+                <button class="button small ghost" @click="linkingPiece = false">取消</button>
+              </div>
+            </template>
+            <div v-else class="row">
+              <button class="button small secondary" @click="startLinkPiece">{{ session.piece ? "更换曲目" : "关联曲目" }}</button>
+              <button v-if="session.piece" class="button small ghost" @click="unlinkPiece">解除</button>
+            </div>
+          </article>
           <article class="card">
             <h2>目标与进度</h2>
             <div v-if="session.goals.length" class="stack">
@@ -200,6 +263,10 @@ onMounted(load);
 </template>
 
 <style scoped>
+.piece-link { display: grid; gap: 3px; text-decoration: none; color: inherit; }
+.piece-link:hover strong { color: var(--primary-strong); }
+.piece-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.piece-tag { padding: 2px 9px; border-radius: 999px; background: var(--primary-soft); color: var(--primary-strong); font-size: .8rem; font-weight: 650; }
 .detail-grid { display: grid; grid-template-columns: 240px minmax(420px, 1fr) 330px; gap: 16px; align-items: start; }
 .media-tab, .annotation-tab { display: grid; gap: 4px; width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; text-align: left; cursor: pointer; }
 .annotation-tab { grid-template-columns: auto 1fr; align-items: center; }

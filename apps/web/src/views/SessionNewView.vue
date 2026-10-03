@@ -5,10 +5,14 @@ import { apiFetch, ApiError } from "../api/client.js";
 import { useAuthStore } from "../stores/auth.js";
 import { toDateTimeLocal } from "../utils/format.js";
 
+interface PieceOption { id: string; title: string; composer: string | null; key: string | null; difficulty: number | null }
+
 const router = useRouter();
 const auth = useAuthStore();
 const title = ref("");
 const instrument = ref("");
+const pieceId = ref("");
+const pieces = ref<PieceOption[]>([]);
 const startedAt = ref(toDateTimeLocal());
 const focus = ref("");
 const location = ref("");
@@ -17,7 +21,12 @@ const durationMinutes = ref<number | null>(null);
 const error = ref("");
 const submitting = ref(false);
 
-onMounted(() => { instrument.value = auth.user?.defaultInstrument ?? ""; });
+onMounted(() => {
+  instrument.value = auth.user?.defaultInstrument ?? "";
+  void apiFetch<{ data: PieceOption[] }>("/api/v1/repertoire/pieces?status=ACTIVE&limit=100&sortBy=updatedAt")
+    .then((result) => { pieces.value = result.data; })
+    .catch(() => { pieces.value = []; });
+});
 
 async function submit(): Promise<void> {
   error.value = "";
@@ -28,6 +37,7 @@ async function submit(): Promise<void> {
       body: JSON.stringify({
         title: title.value,
         instrument: instrument.value,
+        pieceId: pieceId.value || null,
         startedAt: new Date(startedAt.value).toISOString(),
         focus: focus.value || null,
         location: location.value || null,
@@ -53,11 +63,21 @@ async function submit(): Promise<void> {
       <div v-if="error" class="alert">{{ error }}</div>
       <div class="form-grid">
         <label class="field full"><span>练习标题 / 曲目片段</span><input v-model="title" required maxlength="120" placeholder="例如：协奏曲第二乐章 17-24 小节" /></label>
+        <label class="field">
+          <span>关联曲目（可选，自动累计历史练习）</span>
+          <select v-model="pieceId">
+            <option value="">不关联曲目</option>
+            <option v-for="piece in pieces" :key="piece.id" :value="piece.id">
+              {{ piece.title }}{{ piece.composer ? ` · ${piece.composer}` : "" }}{{ piece.key ? ` · ${piece.key}` : "" }}
+            </option>
+          </select>
+          <small class="muted">列表中没有？<RouterLink to="/repertoire">前往曲目资料库</RouterLink>新建。</small>
+        </label>
         <label class="field"><span>乐器</span><input v-model="instrument" required maxlength="60" list="instruments" placeholder="例如：小提琴" /></label>
         <label class="field"><span>开始时间</span><input v-model="startedAt" required type="datetime-local" /></label>
+        <label class="field"><span>实际时长（可选）</span><input v-model.number="durationMinutes" type="number" min="1" max="1440" placeholder="分钟，未填写则按音频总时长计算" /></label>
         <label class="field full"><span>本次重点</span><input v-model="focus" maxlength="500" placeholder="例如：保持换把后的音准与连贯性" /></label>
         <label class="field"><span>练习地点</span><input v-model="location" maxlength="120" /></label>
-        <label class="field"><span>实际时长（可选）</span><input v-model.number="durationMinutes" type="number" min="1" max="1440" placeholder="分钟，未填写则按音频总时长计算" /></label>
         <label class="field full"><span>总体备注</span><textarea v-model="notes" maxlength="5000" placeholder="记录环境、身体状态或本次练习整体感受"></textarea></label>
       </div>
       <div class="row end"><button class="button ghost" type="button" @click="router.back()">取消</button><button class="button" type="submit" :disabled="submitting">{{ submitting ? "创建中…" : "创建并上传音频" }}</button></div>

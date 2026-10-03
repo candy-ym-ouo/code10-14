@@ -81,6 +81,31 @@ enum GoalStatus {
   CANCELLED
 }
 
+enum PieceStatus {
+  ACTIVE
+  MERGED
+  ARCHIVED
+}
+
+enum PieceMergeStatus {
+  CONFLICTS_PENDING
+  RESOLVED
+}
+
+enum MergeConflictField {
+  KEY
+  DIFFICULTY
+  COMPOSER
+}
+
+enum MergeConflictStatus {
+  PENDING
+  KEEP_TARGET
+  USE_SOURCE
+  USE_CUSTOM
+  DISMISSED
+}
+
 model User {
   id                String           @id @default(uuid()) @db.Uuid
   email             String           @unique @db.VarChar(254)
@@ -100,6 +125,9 @@ model User {
   goalProgresses    GoalProgress[]
   auditLogs         AuditLog[]
   dataExports       DataExport[]
+  repertoirePieces  RepertoirePiece[]
+  pieceMergeJobs    PieceMergeJob[]
+  pieceMergeConflicts PieceMergeConflict[]
 
   @@map("users")
 }
@@ -126,6 +154,7 @@ model RefreshSession {
 model PracticeSession {
   id               String             @id @default(uuid()) @db.Uuid
   userId           String             @map("user_id") @db.Uuid
+  pieceId          String?            @map("piece_id") @db.Uuid
   title            String             @db.VarChar(120)
   instrument       String             @db.VarChar(60)
   focus            String?            @db.VarChar(500)
@@ -140,6 +169,7 @@ model PracticeSession {
   createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
   user             User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  piece            RepertoirePiece?   @relation(fields: [pieceId], references: [id], onDelete: SetNull)
   mediaAssets      MediaAsset[]
   annotations      Annotation[]
   goals            Goal[]
@@ -149,6 +179,7 @@ model PracticeSession {
   @@index([userId, status, startedAt(sort: Desc)])
   @@index([userId, instrument])
   @@index([userId, completedAt])
+  @@index([pieceId])
   @@map("practice_sessions")
 }
 
@@ -310,4 +341,79 @@ model AuditLog {
   @@index([userId, createdAt(sort: Desc)])
   @@index([action, createdAt(sort: Desc)])
   @@map("audit_logs")
+}
+
+model RepertoirePiece {
+  id                 String             @id @default(uuid()) @db.Uuid
+  userId             String             @map("user_id") @db.Uuid
+  title              String             @db.VarChar(160)
+  composer           String?            @db.VarChar(160)
+  normalizedTitle    String             @map("normalized_title") @db.VarChar(160)
+  normalizedComposer String?            @map("normalized_composer") @db.VarChar(160)
+  aliases            String[]
+  key                String?            @map("key_signature") @db.VarChar(40)
+  difficulty         Int?               @db.SmallInt
+  tags               String[]
+  notes              String?
+  status             PieceStatus        @default(ACTIVE)
+  mergedIntoId       String?            @map("merged_into_id") @db.Uuid
+  version            Int                @default(0)
+  practiceCount      Int                @default(0) @map("practice_count")
+  totalPracticeMs    BigInt             @default(0) @map("total_practice_ms")
+  lastPracticedAt    DateTime?          @map("last_practiced_at") @db.Timestamptz(6)
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user               User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mergedInto         RepertoirePiece?   @relation("PieceMergedInto", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  absorbedPieces     RepertoirePiece[]  @relation("PieceMergedInto")
+  sessions           PracticeSession[]
+  outgoingMerges     PieceMergeJob[]    @relation("MergeSourcePiece")
+  incomingMerges     PieceMergeJob[]    @relation("MergeTargetPiece")
+
+  @@index([userId, status, updatedAt(sort: Desc)])
+  @@index([userId, difficulty])
+  @@index([userId, key])
+  @@index([userId, lastPracticedAt(sort: Desc)])
+  @@index([mergedIntoId])
+  @@map("repertoire_pieces")
+}
+
+model PieceMergeJob {
+  id              String                @id @default(uuid()) @db.Uuid
+  userId          String                @map("user_id") @db.Uuid
+  sourcePieceId   String                @map("source_piece_id") @db.Uuid
+  targetPieceId   String                @map("target_piece_id") @db.Uuid
+  status          PieceMergeStatus      @default(CONFLICTS_PENDING)
+  migratedSessions Int                 @default(0) @map("migrated_sessions")
+  resolvedAt      DateTime?             @map("resolved_at") @db.Timestamptz(6)
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourcePiece     RepertoirePiece       @relation("MergeSourcePiece", fields: [sourcePieceId], references: [id], onDelete: Cascade)
+  targetPiece     RepertoirePiece       @relation("MergeTargetPiece", fields: [targetPieceId], references: [id], onDelete: Cascade)
+  conflicts       PieceMergeConflict[]
+
+  @@index([userId, status, createdAt(sort: Desc)])
+  @@index([targetPieceId])
+  @@map("piece_merge_jobs")
+}
+
+model PieceMergeConflict {
+  id             String              @id @default(uuid()) @db.Uuid
+  userId         String              @map("user_id") @db.Uuid
+  mergeJobId     String              @map("merge_job_id") @db.Uuid
+  field          MergeConflictField
+  sourceValue    String?             @map("source_value") @db.VarChar(160)
+  targetValue    String?             @map("target_value") @db.VarChar(160)
+  status         MergeConflictStatus @default(PENDING)
+  resolution     String?             @db.VarChar(160)
+  resolvedAt     DateTime?           @map("resolved_at") @db.Timestamptz(6)
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user           User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mergeJob       PieceMergeJob       @relation(fields: [mergeJobId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([mergeJobId, status])
+  @@map("piece_merge_conflicts")
 }

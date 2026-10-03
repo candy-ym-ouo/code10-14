@@ -87,7 +87,24 @@ async function cleanupSession(sessionId: string) {
       const references = await prisma.mediaAsset.count({ where: { objectKey, sessionId: { not: sessionId } } });
       if (references === 0) await deleteObject(objectKey);
     }
+    const linkedPieceId = session.pieceId;
     await prisma.practiceSession.delete({ where: { id: sessionId } });
+    if (linkedPieceId) {
+      const remaining = await prisma.practiceSession.aggregate({
+        where: { pieceId: linkedPieceId, status: { notIn: ["DELETING", "DELETE_FAILED", "DRAFT"] } },
+        _count: { _all: true },
+        _sum: { actualDurationMs: true },
+        _max: { startedAt: true },
+      });
+      await prisma.repertoirePiece.update({
+        where: { id: linkedPieceId },
+        data: {
+          practiceCount: remaining._count._all,
+          totalPracticeMs: remaining._sum.actualDurationMs ?? 0n,
+          lastPracticedAt: remaining._max.startedAt ?? null,
+        },
+      });
+    }
     log("info", { sessionId }, "session cleanup completed");
   } catch (error) {
     await prisma.practiceSession.updateMany({ where: { id: sessionId }, data: { status: "DELETE_FAILED" } });

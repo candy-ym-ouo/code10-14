@@ -66,3 +66,27 @@ export const goalStatusLabels = {
   MISSED: "已逾期",
   CANCELLED: "已取消",
 } as const;
+
+export const pieceStatusLabels = {
+  ACTIVE: "使用中",
+  MERGED: "已合并",
+  ARCHIVED: "已归档",
+} as const;
+
+export const mergeFieldLabels = {
+  KEY: "调性",
+  DIFFICULTY: "难度",
+  COMPOSER: "作曲家",
+} as const;
+
+export const mergeResolutionLabels = {
+  KEEP_TARGET: "保留当前值",
+  USE_SOURCE: "采用来源值",
+  USE_CUSTOM: "使用自定义值",
+  DISMISSED: "暂不处理（关闭）",
+} as const;
+
+export const mergeStatusLabels = {
+  CONFLICTS_PENDING: "有待处理冲突",
+  RESOLVED: "已处理完成",
+} as const;
